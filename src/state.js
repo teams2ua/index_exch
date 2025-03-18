@@ -19,7 +19,7 @@ module.exports = {
         Object.freeze(this);
     },
     IndexState: function (indexDef, orderBook) {
-        this.indexDef = indexDef;
+        this.indexDef = indexDef; // JS Map assetName => qty
         this.orderBook = orderBook;
         Object.freeze(this);
     },

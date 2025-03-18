@@ -17,12 +17,12 @@ describe("Generic solver", function () {
 
         let qtys = [2, 2, 5];
         let prices = [100, 51, 1];
-        let res = await solver.solveGenericCase(qtys, prices,
-            [
-                [-2, -2, 1],
-                [0, 0, 1],
-                [-3, -2, 1]
-            ])
+        let assetCoef = [
+            [-2, -2, 1],
+            [0, 0, 1],
+            [-3, -2, 1]
+        ];
+        let res = await solver.solveGenericCase(qtys, prices, assetCoef);
         assert.deepEqual(res, [1, 1, 5]);
     });
 });

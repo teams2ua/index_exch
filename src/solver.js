@@ -70,6 +70,12 @@ async function solveGenericCase(inputQtys, inputPrices, assetCoef) {
     }
 }
 
+// pick assets that we have a chance to send to Binance
+// maximizing notional
+function liquidityRequestSolver() {
+
+}
+
 class SameOrderBookSolverResult {
     constructor(newOrderBook, fillResponses, marginProfit) {
         this.newOrderBook = newOrderBook;
@@ -92,7 +98,7 @@ function getRemainingOrders(originalOrders, lastIndex, notUsedQty, fills) {
             originalOrders[lastIndex].id,
             notUsedQty,
             originalOrders[lastIndex].price),
-             ...originalOrders.slice(lastIndex + 1)];
+        ...originalOrders.slice(lastIndex + 1)];
     }
     return [...originalOrders.slice(lastIndex)];
 }
@@ -142,6 +148,14 @@ function solveSameIndexOrderBook(orderBook) {
         marginProfit);
 }
 
+function getIndexPrice(indexDefinition, currentPrices) {
+    let res = 0;
+    for (const [assetName, assetQty] of indexDefinition) {
+        res += currentPrices.get(assetName) * assetQty;
+    }
+    return res;
+}
+
 class SolveResult {
     constructor(newState, fillResponses, liquidityRequests) {
         this.newState = newState;
@@ -151,14 +165,82 @@ class SolveResult {
     }
 }
 
-function solveState(state) {
-    
-    solveSameIndexOrderBook();
-    return SolveResult(new state.State(),);
+async function solveState(currentState, timestamp) {
+    // 1. For each index do inner-index match
+    let newIndexes = [];
+    let fills = [];
+    let marginGain = 0;
+    for (const idx of currentState) {
+        let res = solveSameIndexOrderBook(idx.orderBook);
+        newIndexes.push(new state.IndexState(
+            idx.indexDef,
+            res.newOrderBook));
+        marginGain += res.marginProfit;
+        fills.push(...res.fillResponses);
+    }
+    // select orders that cross market price
+    let crossingOrders = [];
+    for (const idx of newIndexes) {
+        let indexMarketPrice = getIndexPrice(idx.indexDef, currentState.currentPrices);
+        
+        for (const buyOrder of idx.orderBook.buys) {
+            if (buyOrder.price < indexMarketPrice)
+                break;
+            crossingOrders.push([idx.indexDef, -1, buyOrder]);
+        }
+        for (const sellOrder of idx.orderBook.sells) {
+            if (sellOrder.price > indexMarketPrice)
+                break;
+            crossingOrders.push([idx.indexDef, 1, sellOrder]);
+        }
+    }
+    // trying to match order cross-index,
+    // read comments for solveGenericCase function
+    if (crossingOrders.length > 1) {
+        // TODO: we could do "quantization" of prices and qtyes
+        // to allow fractions - for this we nca delete price by some big constant
+        // and multiply qty on the same constant
+        let qtys = [];
+        let prices = [];
+        for (const [indexDef, sign, order] in crossingOrders) {
+            qtys.push(order.qty);
+            prices.push(order.price);
+        }
+        let assetCoef = [];
+        for (const [assetName, price] of currentPrices) {
+            let assetOrderQtys = [];
+            for (const [indexDef, sign, order] in crossingOrders) {
+                let val = indexDef.get(assetName);
+                if (val === undefined)
+                    assetOrderQtys.push(0);
+                else
+                    assetOrderQtys.push(val * sign);
+            }
+            assetCoef.push(assetOrderQtys);
+        }
+        // result should contain what amount we could fill
+        // with current liquidity 
+        let genericRes = await solveGenericCase(qtys, prices, assetCoef);
+        console.log(genericRes);
+        // TODO: Process genericRes - 
+        //  * add fills
+        //  * remove completely filled orders from crossingOrders
+        //  * for partially and not filled order create list of assets
+    }
+    // TODO: look into liquidity requests history and understand how many assets could be sent
+    // at this timestamp.
+    // run liquidityRequestSolver()
+    // if we assets to send does not cover all crossing orders
+    // we put this orders back to orderBooks
+    // liquidity request assign for each asset in request a list of orders
+    // that need it, so we can attribute loses later.
+    let liquidityRequests = [];
+    return SolveResult(new state.State(), fills, liquidityRequests);
 }
 
 module.exports = {
     solveSameIndexOrderBook: solveSameIndexOrderBook,
     solveGenericCase: solveGenericCase,
-    solveState: solveState
+    solveState: solveState,
+    liquidityRequestSolver: liquidityRequestSolver
 }
