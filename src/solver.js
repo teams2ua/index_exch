@@ -1,5 +1,74 @@
 "use strict"
 const state = require('./state');
+const z3Solver = require('z3-solver');
+
+/*
+Lets say we have K orders and N assets.
+a[I][J] - is a qty of asset I in index of order J (could be 0)
+we are making a[I][J] negative if the J order is BUY (we take liquidity)
+x[J] - taken qty of order J
+
+x[1] * a[1][1] + x[2] * a[1][2] + .. + x[K] * a[1][K] >= 0 
+x[1] * a[2][1] + x[2] * a[2][2] + .. + x[K] * a[2][K] >= 0 
+...
+x[1] * a[N][1] + x[2] * a[N][2] + .. + x[K] * a[N][K] >= 0 
+x[I] >= 1 and X[I] <= QTY[I] for all I >= 1 and I <= K
+and we need to maximize function SUM(x[I] * price[I]) (maximize notional)
+*/
+
+async function solveGenericCase(inputQtys, inputPrices, assetCoef) {
+    let ll = await z3Solver.init();
+    const context = new ll.Context('main');
+
+    // Create an optimization solver
+    const opt = new context.Optimize();
+
+    let x = context.Array.const('x', context.Int.sort(), context.Int.sort());
+    let price = context.Array.const('p', context.Int.sort(), context.Int.sort());
+    let qty = context.Array.const('q', context.Int.sort(), context.Int.sort());
+
+    for (let idx = 0; idx < inputQtys.length; idx++) {
+        price = price.store(idx, inputPrices[idx]);
+        qty = qty.store(idx, inputQtys[idx]);
+
+        // Sum of all x[i] * price[i] for optimization objective
+        let assetValue = context.Int.val(0);
+        for (let jdx = 0; jdx < assetCoef[idx].length; jdx++) {
+            assetValue = context.Sum(assetValue, context.Product(x.select(jdx), context.Int.val(assetCoef[idx][jdx])));
+        }
+        opt.add(context.GE(assetValue, 0));
+    }
+
+
+    const i = context.Int.const('i');
+    const j = context.Int.const('j');
+    // Add constraints
+
+    opt.add(context.ForAll([i], context.GE(x.select(i), 0))); // x1,x2.. xN ≥ 0
+    opt.add(context.ForAll([i], context.GE(qty.select(i), x.select(i)))); // x1 <= qty1, x2 <=qty2,..., xN <= qtyN
+
+
+    // Sum of all x[i] * price[i] for optimization objective
+    let totalValue = context.Int.val(0);
+    for (let idx = 0; idx < inputQtys.length; idx++) {
+        totalValue = context.Sum(totalValue, context.Product(x.select(idx), price.select(idx)));
+    }
+
+    // Objective: Maximize totalValue
+    opt.maximize(totalValue);
+
+    // Solve the optimization problem
+    if (await opt.check() === 'sat') {
+        const model = opt.model();
+        let res = [];
+        for (let idx = 0; idx < inputPrices.length; idx++) {
+            res.push(model.eval(x.select(idx)).value())
+        }
+        return res;
+    } else {
+        throw new Error("Some error happened");
+    }
+}
 
 class SameOrderBookSolverResult {
     constructor(newOrderBook, fillResponses, marginProfit) {
@@ -83,12 +152,13 @@ class SolveResult {
 }
 
 function solveState(state) {
-
+    
     solveSameIndexOrderBook();
     return SolveResult(new state.State(),);
 }
 
 module.exports = {
     solveSameIndexOrderBook: solveSameIndexOrderBook,
+    solveGenericCase: solveGenericCase,
     solveState: solveState
 }
